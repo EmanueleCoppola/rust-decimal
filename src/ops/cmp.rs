@@ -4,6 +4,7 @@ use crate::ops::common::Dec64;
 
 use core::cmp::Ordering;
 
+#[inline]
 pub(crate) fn cmp_impl(d1: &Decimal, d2: &Decimal) -> Ordering {
     if d2.is_zero() {
         return if d1.is_zero() {
@@ -21,13 +22,27 @@ pub(crate) fn cmp_impl(d1: &Decimal, d2: &Decimal) -> Ordering {
             Ordering::Less
         };
     }
+    let d1_negative = d1.is_sign_negative();
+    let d2_negative = d2.is_sign_negative();
+
     // If the sign is different, then it's an easy answer
-    if d1.is_sign_negative() != d2.is_sign_negative() {
-        return if d1.is_sign_negative() {
-            Ordering::Less
+    if d1_negative != d2_negative {
+        return if d1_negative { Ordering::Less } else { Ordering::Greater };
+    }
+
+    // Same-scale decimals need no rescaling and can be compared directly in their native 96-bit
+    // representation. This also makes the PartialEq fall-through cheap for the common unequal
+    // same-scale case.
+    if d1.scale() == d2.scale() {
+        let high_order = d1.hi().cmp(&d2.hi());
+        let order = if high_order != Ordering::Equal {
+            high_order
         } else {
-            Ordering::Greater
+            let d1_low = u64::from(d1.lo()) | (u64::from(d1.mid()) << 32);
+            let d2_low = u64::from(d2.lo()) | (u64::from(d2.mid()) << 32);
+            d1_low.cmp(&d2_low)
         };
+        return if d1_negative { order.reverse() } else { order };
     }
 
     // Otherwise, do a deep comparison
@@ -35,7 +50,7 @@ pub(crate) fn cmp_impl(d1: &Decimal, d2: &Decimal) -> Ordering {
     let d2 = Dec64::new(d2);
     // We know both signs are the same here so flip it here.
     // Negative is handled differently. i.e. 0.5 > 0.01 however -0.5 < -0.01
-    if d1.negative {
+    if d1_negative {
         cmp_internal(&d2, &d1)
     } else {
         cmp_internal(&d1, &d2)

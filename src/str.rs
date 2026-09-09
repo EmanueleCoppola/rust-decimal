@@ -10,6 +10,72 @@ use arrayvec::{ArrayString, ArrayVec};
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
 
+const DECIMAL_CHUNK: u32 = 1_000_000_000;
+const DECIMAL_CHUNK_DIGITS: usize = 9;
+
+#[inline(always)]
+fn push_reversed_chunk(chars: &mut ArrayVec<char, MAX_STR_BUFFER_SIZE>, mut chunk: u32, fixed_digits: Option<usize>) {
+    if let Some(digits) = fixed_digits {
+        for _ in 0..digits {
+            let quotient = chunk / 10;
+            chars.push(char::from(b'0' + (chunk - quotient * 10) as u8));
+            chunk = quotient;
+        }
+    } else {
+        while chunk > 0 {
+            let quotient = chunk / 10;
+            chars.push(char::from(b'0' + (chunk - quotient * 10) as u8));
+            chunk = quotient;
+        }
+    }
+}
+
+#[inline]
+fn push_reversed_mantissa_digits(value: &Decimal, chars: &mut ArrayVec<char, MAX_STR_BUFFER_SIZE>) {
+    let lo = value.lo();
+    let mid = value.mid();
+    let hi = value.hi();
+
+    // Most application values fit in 32 or 64 bits. Keep those paths entirely in native integer
+    // arithmetic and avoid the three-limb 96-bit division loop.
+    if hi == 0 {
+        if mid == 0 {
+            push_reversed_chunk(chars, lo, None);
+            return;
+        }
+
+        let mut working = u64::from(lo) | (u64::from(mid) << 32);
+        let base = u64::from(DECIMAL_CHUNK);
+        while working > 0 {
+            let quotient = working / base;
+            let remainder = (working - quotient * base) as u32;
+            push_reversed_chunk(
+                chars,
+                remainder,
+                if quotient == 0 {
+                    None
+                } else {
+                    Some(DECIMAL_CHUNK_DIGITS)
+                },
+            );
+            working = quotient;
+        }
+        return;
+    }
+
+    // A Decimal has at most 29 mantissa digits, so base 10^9 reduces the expensive 96-bit
+    // divisions from as many as 29 to at most 4.
+    let mut working = [lo, mid, hi];
+    loop {
+        let remainder = div_by_u32(&mut working, DECIMAL_CHUNK);
+        let more = !is_all_zero(&working);
+        push_reversed_chunk(chars, remainder, if more { Some(DECIMAL_CHUNK_DIGITS) } else { None });
+        if !more {
+            break;
+        }
+    }
+}
+
 // impl that doesn't allocate for serialization purposes.
 pub(crate) fn to_str_internal(
     value: &Decimal,
@@ -21,11 +87,7 @@ pub(crate) fn to_str_internal(
 
     // Convert to a string and manipulate that (neg at front, inject decimal)
     let mut chars = ArrayVec::<_, MAX_STR_BUFFER_SIZE>::new();
-    let mut working = value.mantissa_array3();
-    while !is_all_zero(&working) {
-        let remainder = div_by_u32(&mut working, 10u32);
-        chars.push(char::from(b'0' + remainder as u8));
-    }
+    push_reversed_mantissa_digits(value, &mut chars);
     while scale > chars.len() {
         chars.push('0');
     }
@@ -775,6 +837,28 @@ mod test {
     use crate::Decimal;
     use arrayvec::ArrayString;
     use core::{fmt::Write, str::FromStr};
+
+    #[test]
+    fn to_string_handles_decimal_chunk_boundaries() {
+        let values = [
+            "0",
+            "1",
+            "999999999",
+            "1000000000",
+            "1000000001",
+            "999999999999999999",
+            "1000000000000000000",
+            "18446744073709551615",
+            "79228162514264337593543950335",
+            "0.000000001",
+            "12345678901234567890.12345678",
+        ];
+
+        for value in values {
+            let decimal = Decimal::from_str(value).unwrap();
+            assert_eq!(decimal.to_string(), value, "input: {value}");
+        }
+    }
 
     #[test]
     fn display_does_not_overflow_max_capacity() {

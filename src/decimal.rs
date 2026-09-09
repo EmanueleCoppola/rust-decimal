@@ -1382,13 +1382,33 @@ impl Decimal {
         }
 
         let mut result = self.mantissa_array3();
-        let mut working = self.mantissa_array3();
         while scale > 0 {
-            if ops::array::div_by_u32(&mut working, 10) > 0 {
-                break;
+            // Probe up to 9 decimal digits at once. A successful probe strips the whole chunk
+            // with one 96-bit division instead of up to 9 divisions by 10.
+            let chunk = scale.min(9);
+            let mut working = result;
+            let remainder = ops::array::div_by_u32(&mut working, POWERS_10[chunk as usize]);
+
+            if remainder == 0 {
+                result = working;
+                scale -= chunk;
+                continue;
             }
-            scale -= 1;
-            result.copy_from_slice(&working);
+
+            // The whole chunk was not divisible, but the remainder tells us exactly how many
+            // decimal zeroes from the low end still are. Strip those once, then we're normalized.
+            let mut remainder = remainder;
+            let mut trailing = 0;
+            while trailing < chunk && remainder % 10 == 0 {
+                remainder /= 10;
+                trailing += 1;
+            }
+            if trailing > 0 {
+                let remainder = ops::array::div_by_u32(&mut result, POWERS_10[trailing as usize]);
+                debug_assert_eq!(remainder, 0);
+                scale -= trailing;
+            }
+            break;
         }
         self.lo = result[0];
         self.mid = result[1];
@@ -2766,6 +2786,7 @@ impl PartialOrd for Decimal {
 }
 
 impl Ord for Decimal {
+    #[inline]
     fn cmp(&self, other: &Decimal) -> Ordering {
         ops::cmp_impl(self, other)
     }

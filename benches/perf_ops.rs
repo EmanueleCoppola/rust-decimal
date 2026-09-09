@@ -93,6 +93,33 @@ fn benches(c: &mut Criterion) {
     c.bench_function("normalize_nostrip", |b| b.iter(|| black_box(NORM_NOSTRIP).normalize()));
     // Normalize on an odd mantissa (hits the odd fast path).
     c.bench_function("normalize_odd", |b| b.iter(|| black_box(NORM_ODD).normalize()));
+
+    // Formatting benchmarks isolate the stack-only mantissa-to-digits conversion used by
+    // Display/serde-str without including a String heap allocation.
+    c.bench_function("array_string_32", |b| {
+        b.iter(|| {
+            let value = black_box(NORM_ODD);
+            let _ = black_box(value.array_string());
+        })
+    });
+    c.bench_function("array_string_64", |b| {
+        b.iter(|| {
+            let value = black_box(A_64);
+            let _ = black_box(value.array_string());
+        })
+    });
+    c.bench_function("array_string_96", |b| {
+        b.iter(|| {
+            let value = black_box(C_96);
+            let _ = black_box(value.array_string());
+        })
+    });
+
+    // Same-scale compare is also the fallback used by PartialEq after the identical-bits fast path
+    // misses.
+    c.bench_function("cmp_same_scale_neq", |b| {
+        b.iter(|| black_box(A_64).cmp(&black_box(B_64)))
+    });
 }
 
 criterion_group!(g, benches);

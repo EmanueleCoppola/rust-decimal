@@ -211,6 +211,7 @@ pub(crate) fn mul_part(left: u32, right: u32, high: u32) -> (u32, u32) {
 }
 
 // Returns remainder
+#[inline]
 pub(crate) fn div_by_u32<const N: usize>(bits: &mut [u32; N], divisor: u32) -> u32 {
     if divisor == 0 {
         // Divide by zero
