@@ -234,6 +234,7 @@ pub(crate) fn div_by_u32<const N: usize>(bits: &mut [u32; N], divisor: u32) -> u
 
 // This function should be used with caution. It unwraps the standard divide loop - it is intended
 // for small inputs (<10) and is optimized to be left as unchecked.
+#[inline(always)]
 pub(crate) const fn div_by_power<const POWER: usize>(bits: &mut [u32; 3]) -> u32 {
     let mut remainder = 0u32;
     let divisor = POWERS_10[POWER] as u64;
@@ -247,6 +248,22 @@ pub(crate) const fn div_by_power<const POWER: usize>(bits: &mut [u32; 3]) -> u32
     remainder = (temp % divisor) as u32;
     bits[0] = (temp / divisor) as u32;
     remainder
+}
+
+#[inline(always)]
+pub(crate) fn div_by_pow10(bits: &mut [u32; 3], power: u32) -> u32 {
+    match power {
+        1 => div_by_power::<1>(bits),
+        2 => div_by_power::<2>(bits),
+        3 => div_by_power::<3>(bits),
+        4 => div_by_power::<4>(bits),
+        5 => div_by_power::<5>(bits),
+        6 => div_by_power::<6>(bits),
+        7 => div_by_power::<7>(bits),
+        8 => div_by_power::<8>(bits),
+        9 => div_by_power::<9>(bits),
+        _ => unreachable!("power of ten must be in 1..=9"),
+    }
 }
 
 #[inline]

@@ -1344,6 +1344,7 @@ impl Decimal {
     /// # }
     /// ```
     #[must_use]
+    #[inline]
     pub fn normalize(&self) -> Decimal {
         let mut result = *self;
         result.normalize_assign();
@@ -1364,6 +1365,7 @@ impl Decimal {
     /// # Ok(())
     /// # }
     /// ```
+    #[inline]
     pub fn normalize_assign(&mut self) {
         if self.is_zero() {
             self.flags = 0;
@@ -1381,13 +1383,39 @@ impl Decimal {
             return;
         }
 
+        // The common 32/64-bit case can stay in native integer arithmetic. Division by the
+        // constant 10 is compiled to reciprocal multiplication and is substantially cheaper than
+        // entering the generic three-limb division loop.
+        if self.hi == 0 {
+            let mut mantissa = u64::from(self.lo) | (u64::from(self.mid) << 32);
+            let mut quotient = mantissa / 10;
+            if mantissa - quotient * 10 != 0 {
+                return;
+            }
+            mantissa = quotient;
+            scale -= 1;
+
+            while scale > 0 {
+                quotient = mantissa / 10;
+                if mantissa - quotient * 10 != 0 {
+                    break;
+                }
+                mantissa = quotient;
+                scale -= 1;
+            }
+            self.lo = mantissa as u32;
+            self.mid = (mantissa >> 32) as u32;
+            self.flags = flags(self.is_sign_negative(), scale);
+            return;
+        }
+
         let mut result = self.mantissa_array3();
         while scale > 0 {
             // Probe up to 9 decimal digits at once. A successful probe strips the whole chunk
             // with one 96-bit division instead of up to 9 divisions by 10.
             let chunk = scale.min(9);
             let mut working = result;
-            let remainder = ops::array::div_by_u32(&mut working, POWERS_10[chunk as usize]);
+            let remainder = ops::array::div_by_pow10(&mut working, chunk);
 
             if remainder == 0 {
                 result = working;
@@ -1404,7 +1432,7 @@ impl Decimal {
                 trailing += 1;
             }
             if trailing > 0 {
-                let remainder = ops::array::div_by_u32(&mut result, POWERS_10[trailing as usize]);
+                let remainder = ops::array::div_by_pow10(&mut result, trailing);
                 debug_assert_eq!(remainder, 0);
                 scale -= trailing;
             }
